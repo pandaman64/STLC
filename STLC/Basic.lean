@@ -1,1 +1,1 @@
-def hello := "world"
+-- See `study_plan.md` for the plan.
