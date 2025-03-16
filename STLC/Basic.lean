@@ -363,21 +363,88 @@ theorem cbv_deterministic {t t' t'' : Term} (step₁ : Cbv t t') (step₂ : Cbv 
 
 end Term
 
-def TyCtx := List (FVar × Ty)
+@[simp]
+theorem Finset.singleton_inter_empty_left {α : Type} [DecidableEq α] {a : α} {s : Finset α} : {a} ∩ s = ∅ ↔ a ∉ s := by
+  apply Iff.intro
+  · intro a_1
+    apply Aesop.BuiltinRules.not_intro
+    intro a_2
+    simp_all only [singleton_inter_of_mem, singleton_ne_empty]
+  · intro a_1
+    simp_all only [not_false_eq_true, singleton_inter_of_not_mem]
 
-instance : Repr TyCtx := inferInstanceAs (Repr (List (FVar × Ty)))
+@[simp]
+theorem Finset.singleton_inter_empty_right {α : Type} [DecidableEq α] {a : α} {s : Finset α} : s ∩ {a} = ∅ ↔ a ∉ s := by
+  apply Iff.intro
+  · intro a_1
+    apply Aesop.BuiltinRules.not_intro
+    intro a_2
+    simp_all only [inter_singleton_of_mem, singleton_ne_empty]
+  · intro a_1
+    simp_all only [not_false_eq_true, inter_singleton_of_not_mem]
 
-instance : DecidableEq TyCtx := inferInstanceAs (DecidableEq (List (FVar × Ty)))
-
-instance : Membership (FVar × Ty) TyCtx := inferInstanceAs (Membership (FVar × Ty) (List (FVar × Ty)))
+abbrev TyCtx := List (FVar × Ty)
 
 namespace TyCtx
 
-def dom (Γ : TyCtx) : List FVar := Γ.map (·.1)
+def dom (Γ : TyCtx) : Finset FVar := Γ.foldr (init := ∅) (fun (x, _) acc => acc ∪ {x})
 
-inductive ok : TyCtx → Prop where
-  | ok_nil : ok []
-  | ok_cons {x : FVar} {T : Ty} {Γ : TyCtx} (h₁ : x ∉ Γ.dom) (h₂ : ok Γ) : ok ((x, T) :: Γ)
+@[simp]
+theorem dom_nil : dom [] = ∅ := rfl
+
+@[simp]
+theorem dom_cons {p : FVar × Ty} {Γ : TyCtx} : dom (p :: Γ) = dom Γ ∪ {p.1} := by
+  simp [dom]
+
+theorem mem_dom_iff {x : FVar} {Γ : TyCtx} : x ∈ Γ.dom ↔ ∃ T, (x, T) ∈ Γ := by
+  induction Γ with
+  | nil => simp [dom]
+  | cons p Γ ih =>
+    let ⟨y, yT⟩ := p
+    simp [ih]
+    apply Iff.intro
+    . intro h
+      match h with
+      | .inl ⟨T, mem⟩ => exact ⟨T, .inr mem⟩
+      | .inr h => exact ⟨yT, .inl ⟨h, rfl⟩⟩
+    . intro ⟨T, h⟩
+      match h with
+      | .inl ⟨h₁, _⟩ => exact .inr h₁
+      | .inr h => exact .inl ⟨T, h⟩
+
+@[simp]
+theorem mem_dom_append {x : FVar} {Γ₁ Γ₂ : TyCtx} : x ∈ (Γ₁ ++ Γ₂).dom ↔ x ∈ Γ₁.dom ∨ x ∈ Γ₂.dom := by
+  induction Γ₁ with
+  | nil => simp
+  | cons p Γ₁ ih =>
+    simp [ih]
+    aesop
+
+def ok : TyCtx → Prop
+  | [] => True
+  | (x, _) :: (Γ : TyCtx) => x ∉ Γ.dom ∧ ok Γ
+
+@[simp]
+theorem ok_nil : ok [] := by simp [ok]
+
+theorem ok_cons {x : FVar} {T : Ty} {Γ : TyCtx} (h₁ : x ∉ Γ.dom) (h₂ : ok Γ) : ok ((x, T) :: Γ) := by
+  simp [ok]
+  exact ⟨h₁, h₂⟩
+
+@[simp]
+theorem ok_cons_iff {p : FVar × Ty} {Γ : TyCtx} : ok (p :: Γ) ↔ p.1 ∉ Γ.dom ∧ ok Γ := by
+  simp [ok]
+
+@[simp]
+theorem ok_append {Γ₁ Γ₂ : TyCtx} : ok (Γ₁ ++ Γ₂) ↔ ok Γ₁ ∧ ok Γ₂ ∧ Γ₁.dom ∩ Γ₂.dom = ∅ := by
+  induction Γ₁ with
+  | nil => simp
+  | cons p Γ₁ ih =>
+    simp [ih, Finset.union_inter_distrib_right]
+    aesop
+
+theorem ok_append_symm {Γ₁ Γ₂ : TyCtx} (h : ok (Γ₁ ++ Γ₂)) : ok (Γ₂ ++ Γ₁) := by
+  simp_all [Finset.inter_comm]
 
 end TyCtx
 
@@ -385,8 +452,8 @@ namespace Term
 
 inductive HasType : TyCtx → Term → Ty → Prop where
   | type_var {Γ : TyCtx} {x : FVar} {T : Ty} (ok : Γ.ok) (mem : (x, T) ∈ Γ) : HasType Γ (.fvar x) T
-  | type_app {Γ : TyCtx} {t₁ t₂ : Term} {T₁ T₂ : Ty}
-    (h₁ : HasType Γ t₁ (T₁.arrow T₂)) (h₂ : HasType Γ t₂ T₁) : HasType Γ (.app t₁ t₂) T₂
+  | type_app {Γ : TyCtx} {t₁ t₂ : Term} {T U : Ty}
+    (h₁ : HasType Γ t₁ (T.arrow U)) (h₂ : HasType Γ t₂ T) : HasType Γ (.app t₁ t₂) U
   | type_lam {Γ : TyCtx} {t : Term} {T₁ T₂ : Ty} (L : Finset FVar)
     (h : ∀ x ∉ L, HasType (Γ.cons (x, T₁)) (t.openT (.fvar x)) T₂) : HasType Γ (.lam t) (T₁.arrow T₂)
 
@@ -397,5 +464,122 @@ theorem LC_of_hasType {Γ : TyCtx} {t : Term} {T : Ty} (typing : t.HasType Γ T)
   | type_lam L h ih =>
     simp
     exact ⟨L, ih⟩
+
+namespace HasType
+
+theorem weaken' {G F E : TyCtx} {t : Term} {T : Ty} (ty : t.HasType (G ++ E) T) (ok : (G ++ F ++ E).ok) : t.HasType (G ++ F ++ E) T := by
+  generalize hΓ : G ++ E = Γ at ty
+  induction ty generalizing G with
+  | @type_var Γ x T ok' mem =>
+    subst hΓ
+    have : (x, T) ∈ G ++ F ++ E := by
+      simp_all only [List.append_assoc, List.mem_append]
+      cases mem with
+      | inl h => simp [h]
+      | inr h => simp [h]
+    exact .type_var ok this
+  | @type_app Γ t₁ t₂ T₁ T₂ h₁ h₂ ih₁ ih₂ => exact type_app (ih₁ ok hΓ) (ih₂ ok hΓ)
+  | @type_lam Γ t T₁ T₂ L h ih =>
+    subst hΓ
+    apply type_lam (L ∪ G.dom ∪ F.dom ∪ E.dom)
+    intro x hx
+    simp at hx
+    have ok' : TyCtx.ok (((x, T₁) :: G) ++ F ++ E) := by
+      refine TyCtx.ok_cons ?_ ok
+      simp [hx]
+    exact ih x (by simp [hx]) ok' (by simp)
+
+theorem weaken {E F : TyCtx} {t : Term} {T : Ty} (ty : t.HasType E T) (ok : (F ++ E).ok) : t.HasType (F ++ E) T := by
+  have ok' : TyCtx.ok ([] ++ F ++ E) := by simp [ok]
+  have : t.HasType ([] ++ F ++ E) T := weaken' (by simp [ty]) ok'
+  simp at this
+  exact this
+
+theorem substitution' {E F : TyCtx} {t u : Term} {x : FVar} {T U : Ty} (ty : t.HasType (F ++ (x, U) :: E) T) (h : u.HasType E U) :
+  (t.subst x u).HasType (F ++ E) T := by
+  generalize hΓ : F ++ (x, U) :: E = Γ at ty
+  induction ty generalizing E F with
+  | @type_var Γ y T ok mem =>
+    subst hΓ
+    simp_all [Finset.inter_union_distrib_left]
+    have ok' : (F ++ E).ok := by simp [ok]
+    split
+    next eq =>
+      simp [←eq] at mem
+      match mem with
+      | .inl mem =>
+        have : x ∈ F.dom := TyCtx.mem_dom_iff.mpr ⟨_, mem⟩
+        simp [this] at ok
+      | .inr (.inl tyeq) =>
+        subst tyeq
+        exact weaken h ok'
+      | .inr (.inr mem) =>
+        have : x ∈ E.dom := TyCtx.mem_dom_iff.mpr ⟨_, mem⟩
+        simp [this] at ok
+    next ne =>
+      match mem with
+      | .inl mem => exact type_var ok' (by simp [mem])
+      | .inr (.inl eq) => simp [eq] at ne
+      | .inr (.inr mem) => exact type_var ok' (by simp [mem])
+  | type_app h₁ h₂ ih₁ ih₂ =>
+    simp
+    exact .type_app (ih₁ h hΓ) (ih₂ h hΓ)
+  | @type_lam Γ t T₁ T₂ L _ ih =>
+    subst hΓ
+    apply type_lam (L ∪ F.dom ∪ E.dom ∪ {x})
+    intro y hy
+    simp at hy
+    have ty' : HasType (((y, T₁) :: F) ++ E) ((t.openT (fvar y)).subst x u) T₂ := ih y (by simp [hy]) h (by simp)
+    rw [open_var_subst (Ne.symm (by simp [hy])) (LC_of_hasType h)] at ty'
+    exact ty'
+
+theorem substitution {E : TyCtx} {t u : Term} {x : FVar} {T U : Ty} (ty : t.HasType ((x, U) :: E) T) (h : u.HasType E U) :
+  (t.subst x u).HasType E T :=
+  (substitution' ty h : (t.subst x u).HasType ([] ++ E) T)
+
+end HasType
+
+theorem progress {t : Term} {T : Ty} (typing : t.HasType [] T) : t.IsValue ∨ ∃ t', Cbv t t' := by
+  generalize h : [] = Γ at typing
+  induction typing with
+  | type_var ok mem =>
+    subst h
+    simp at mem
+  | @type_app Γ t₁ t₂ T₁ T₂ ty₁ ty₂ ih₁ ih₂ =>
+    subst h
+    simp at ih₁ ih₂
+    match ih₁, ih₂ with
+    | .inl val₁, .inl val₂ =>
+      match val₁ with
+      | @IsValue.value_lam t₁ h => exact .inr ⟨t₁.openT t₂, .cbv_beta h val₂⟩
+    | .inl val₁, .inr ⟨t₂', step₂⟩ => exact .inr ⟨.app t₁ t₂', .cbv_app_right val₁ step₂⟩
+    | .inr ⟨t₁', step₁⟩, _ => exact .inr ⟨.app t₁' t₂, .cbv_app_left step₁ (LC_of_hasType ty₂)⟩
+  | @type_lam Γ t T₁ T₂ L h' ih =>
+    subst h
+    have : t.IsBody := by
+      exists L
+      intro x mem
+      exact LC_of_hasType (h' x mem)
+    exact .inl (.value_lam this)
+
+theorem preservation {Γ : TyCtx} {t t' : Term} {T : Ty} (ty : t.HasType Γ T) (step : Cbv t t') : t'.HasType Γ T := by
+  induction step generalizing T with
+  | @cbv_beta t u h val =>
+    cases ty with
+    | @type_app _ _ _ U _ ty₁ ty₂ =>
+      cases ty₁ with
+      | type_lam L h =>
+        let ⟨x, hx⟩ := (L ∪ t.fv).choose_fresh'
+        simp at hx
+        have ty' : HasType ((x, U) :: Γ) (t.openT (.fvar x)) T := h x hx.1
+        have ty'' : HasType Γ ((t.openT (.fvar x)).subst x u) T := ty'.substitution ty₂
+        simp [open_subst (LC_of_hasType ty₂), subst_fresh hx.2] at ty''
+        exact ty''
+  | cbv_app_left step lc ih =>
+    cases ty with
+    | type_app ty₁ ty₂ => exact .type_app (ih ty₁) ty₂
+  | cbv_app_right val step ih =>
+    cases ty with
+    | type_app ty₁ ty₂ => exact .type_app ty₁ (ih ty₂)
 
 end Term
