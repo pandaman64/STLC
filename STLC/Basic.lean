@@ -1061,7 +1061,7 @@ theorem TypedSN_substs {Γ : TyCtx} {ts : List (FVar × Term)} {t : Term} {T : T
     have steps : Cbvs ((substs ts t).lam.app u) ((substs ts t).lam.app u') := cbvs_app_right (.value_lam body) steps
     have beta : Cbv ((substs ts t).lam.app u') ((substs ts t).openT u') := .cbv_beta body val
 
-    let L' := L ∪ dom_substs ts ∪ t.fv
+    let L' := L ∪ t.fv
     let ⟨y, hy⟩ := L'.choose_fresh'
     simp [L'] at hy
 
@@ -1070,7 +1070,7 @@ theorem TypedSN_substs {Γ : TyCtx} {ts : List (FVar × Term)} {t : Term} {T : T
         _ = substs ts (t.openT u') := by
           rw [open_substs inst, closed_substs (closed_of_TypedSN tsn')]
         _ = substs ts ((t.openT (.fvar y)).subst y u') := by
-          simp [open_subst (LC_of_value val), subst_fresh hy.2.2]
+          simp [open_subst (LC_of_value val), subst_fresh hy.2]
         _ = substs ((y, u') :: ts) (t.openT (.fvar y)) := by
           simp
     rw [this] at beta
