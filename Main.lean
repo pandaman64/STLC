@@ -1,4 +1,4 @@
 import STLC
 
-def main : IO Unit :=
-  IO.println s!"Hello, {hello}!"
+def main : IO Unit := do
+  return ()

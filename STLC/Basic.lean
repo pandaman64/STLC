@@ -60,6 +60,18 @@ def fv (t : Term) : Finset FVar :=
   | app t₁ t₂ => t₁.fv ∪ t₂.fv
   | lam t => t.fv
 
+@[simp]
+theorem fv_bvar {k : Nat} : (bvar k).fv = ∅ := rfl
+
+@[simp]
+theorem fv_fvar {x : FVar} : (fvar x).fv = {x} := rfl
+
+@[simp]
+theorem fv_app {t₁ t₂ : Term} : (app t₁ t₂).fv = t₁.fv ∪ t₂.fv := rfl
+
+@[simp]
+theorem fv_lam {t : Term} : (lam t).fv = t.fv := rfl
+
 def openAt (t : Term) (k : Nat) (u : Term) : Term :=
   match t with
   | bvar i => if k = i then u else t
@@ -329,6 +341,28 @@ inductive Cbv : Term → Term → Prop where
   | cbv_app_left {t t' u : Term} (h : Cbv t t') (lc : u.LC) : Cbv (.app t u) (.app t' u)
   | cbv_app_right {t u u' : Term} (val : t.IsValue) (h : Cbv u u') : Cbv (.app t u) (.app t u')
 
+inductive Cbvs : Term → Term → Prop where
+  | refl {t : Term} : Cbvs t t
+  | next {t t' t'' : Term} (step : Cbv t t') (cbvs : Cbvs t' t'') : Cbvs t t''
+
+theorem cbvs_snoc {t t' t'' : Term} (cbvs : Cbvs t t') (step : Cbv t' t'') : Cbvs t t'' := by
+  induction cbvs with
+  | refl => exact .next step .refl
+  | @next t₁ t₂ t₃ step' cbvs ih => exact .next step' (ih step)
+
+theorem cbvs_app_right {t u u' : Term} (val : t.IsValue) (cbvs : Cbvs u u') : Cbvs (.app t u) (.app t u') := by
+  induction cbvs with
+  | refl => exact .refl
+  | next step cbvs ih => exact .next (.cbv_app_right val step) ih
+
+def halts (t : Term) : Prop := ∃ u, Cbvs t u ∧ u.IsValue
+
+theorem halts_of_value {t : Term} (val : t.IsValue) : t.halts := ⟨t, .refl, val⟩
+
+theorem halts_of_step_halts {t t' : Term} (step : Cbv t t') (h : t'.halts) : t.halts := by
+  have ⟨u, cbvs, val⟩ := h
+  exact ⟨u, .next step cbvs, val⟩
+
 theorem LC_of_value {t : Term} (val : t.IsValue) : t.LC := by
   cases val with
   | value_lam h => simp [h]
@@ -455,7 +489,7 @@ inductive HasType : TyCtx → Term → Ty → Prop where
   | type_app {Γ : TyCtx} {t₁ t₂ : Term} {T U : Ty}
     (h₁ : HasType Γ t₁ (T.arrow U)) (h₂ : HasType Γ t₂ T) : HasType Γ (.app t₁ t₂) U
   | type_lam {Γ : TyCtx} {t : Term} {T₁ T₂ : Ty} (L : Finset FVar)
-    (h : ∀ x ∉ L, HasType (Γ.cons (x, T₁)) (t.openT (.fvar x)) T₂) : HasType Γ (.lam t) (T₁.arrow T₂)
+    (h : ∀ x ∉ L, HasType ((x, T₁) :: Γ) (t.openT (.fvar x)) T₂) : HasType Γ (.lam t) (T₁.arrow T₂)
 
 theorem LC_of_hasType {Γ : TyCtx} {t : Term} {T : Ty} (typing : t.HasType Γ T) : t.LC := by
   induction typing with
@@ -466,6 +500,16 @@ theorem LC_of_hasType {Γ : TyCtx} {t : Term} {T : Ty} (typing : t.HasType Γ T)
     exact ⟨L, ih⟩
 
 namespace HasType
+
+theorem ok {Γ : TyCtx} {t : Term} {T : Ty} (ty : t.HasType Γ T) : Γ.ok := by
+  induction ty with
+  | type_var ok mem => exact ok
+  | type_app h₁ h₂ ih₁ ih₂ => exact ih₁
+  | type_lam L h ih =>
+    let ⟨x, hx⟩ := L.choose_fresh'
+    have ok := ih x hx
+    simp at ok
+    exact ok.2
 
 theorem weaken' {G F E : TyCtx} {t : Term} {T : Ty} (ty : t.HasType (G ++ E) T) (ok : (G ++ F ++ E).ok) : t.HasType (G ++ F ++ E) T := by
   generalize hΓ : G ++ E = Γ at ty
@@ -581,5 +625,461 @@ theorem preservation {Γ : TyCtx} {t t' : Term} {T : Ty} (ty : t.HasType Γ T) (
   | cbv_app_right val step ih =>
     cases ty with
     | type_app ty₁ ty₂ => exact .type_app ty₁ (ih ty₂)
+
+inductive SN : Term → Prop where
+  | intro {t : Term} (h : ∀ t', Cbv t t' → SN t') : SN t
+
+theorem SN_of_value {t : Term} (val : t.IsValue) : SN t :=
+  .intro (fun _ step => False.elim (no_cbv_of_value val step))
+
+theorem SN_iff_of_cbv {t t' : Term} (step : Cbv t t') : SN t ↔ SN t' := by
+  apply Iff.intro
+  . intro sn
+    match sn with
+    | .intro h => exact h t' step
+  . intro sn
+    match sn with
+    | .intro h =>
+      apply SN.intro
+      intro t'' step'
+      have := cbv_deterministic step step'
+      exact this ▸ sn
+
+theorem SN_iff_of_cbvs {t t' : Term} (steps : Cbvs t t') : SN t ↔ SN t' := by
+  induction steps with
+  | refl => rfl
+  | next step steps ih => rw [SN_iff_of_cbv step, ih]
+
+theorem SN_of_halts {t : Term} (halts : t.halts) : SN t := by
+  have ⟨u, steps, val⟩ := halts
+  exact (SN_iff_of_cbvs steps).mpr (SN_of_value val)
+
+theorem halts_of_hasType_SN {T : Ty} {t : Term} (ty : t.HasType [] T) (sn : SN t) : t.halts := by
+  induction sn with
+  | @intro t h ih =>
+    match progress ty with
+    | .inl val => exact halts_of_value val
+    | .inr ⟨t', step⟩ =>
+      have ty' := preservation ty step
+      have halts' := ih t' step ty'
+      exact halts_of_step_halts step halts'
+
+def TypedSN (T : Ty) (t : Term) : Prop :=
+  match T with
+  | .base => t.HasType [] T ∧ SN t
+  | .arrow T₁ T₂ => t.HasType [] (.arrow T₁ T₂) ∧ SN t ∧ ∀ u, TypedSN T₁ u → TypedSN T₂ (.app t u)
+
+theorem SN_of_TypedSN {t : Term} {T : Ty} (tsn : TypedSN T t) : SN t := by
+  cases T with
+  | base => exact tsn.2
+  | arrow T₁ T₂ =>
+    simp [TypedSN] at tsn
+    exact tsn.2.1
+
+theorem HasType_of_TypedSN {T : Ty} {t : Term} (tsn : TypedSN T t) : t.HasType [] T := by
+  cases T with
+  | base => simp_all [TypedSN]
+  | arrow T₁ T₂ => simp_all [TypedSN]
+
+theorem LC_of_TypedSN {T : Ty} {t : Term} (tsn : TypedSN T t) : t.LC :=
+  LC_of_hasType (HasType_of_TypedSN tsn)
+
+theorem halts_of_TypedSN {T : Ty} {t : Term} (tsn : TypedSN T t) : t.halts :=
+  halts_of_hasType_SN (HasType_of_TypedSN tsn) (SN_of_TypedSN tsn)
+
+theorem TypedSN_of_cbv {t t' : Term} {T : Ty} (step : Cbv t t') (tsn : TypedSN T t) : TypedSN T t' := by
+  induction T generalizing t t' with
+  | base =>
+    simp [TypedSN] at *
+    exact ⟨preservation tsn.1 step, (SN_iff_of_cbv step).mp tsn.2⟩
+  | arrow T₁ T₂ ih₁ ih₂ =>
+    simp [TypedSN] at *
+    refine ⟨preservation tsn.1 step, (SN_iff_of_cbv step).mp tsn.2.1, ?_⟩
+    intro u tsn'
+    have step' : Cbv (.app t u) (.app t' u) := .cbv_app_left step (LC_of_TypedSN tsn')
+    exact ih₂ step' (tsn.2.2 u tsn')
+
+theorem TypedSN_of_cbv_rev {t t' : Term} {T : Ty} (ty : t.HasType [] T) (step : Cbv t t') (tsn : TypedSN T t') : TypedSN T t := by
+  induction T generalizing t t' with
+  | base =>
+    simp [TypedSN] at *
+    exact ⟨ty, (SN_iff_of_cbv step).mpr tsn.2⟩
+  | arrow T₁ T₂ ih₁ ih₂ =>
+    simp [TypedSN] at *
+    refine ⟨ty, (SN_iff_of_cbv step).mpr tsn.2.1, ?_⟩
+    intro u tsn'
+    have step' : Cbv (.app t u) (.app t' u) := .cbv_app_left step (LC_of_TypedSN tsn')
+    exact ih₂ (.type_app ty (HasType_of_TypedSN tsn')) step' (tsn.2.2 u tsn')
+
+theorem TypedSN_of_cbvs {t t' : Term} {T : Ty} (steps : Cbvs t t') (tsn : TypedSN T t) : TypedSN T t' := by
+  induction steps with
+  | refl => exact tsn
+  | next step _ ih => exact ih (TypedSN_of_cbv step tsn)
+
+theorem TypedSN_of_cbvs_rev {t t' : Term} {T : Ty} (ty : t.HasType [] T) (steps : Cbvs t t') (tsn : TypedSN T t') : TypedSN T t := by
+  induction steps with
+  | refl => exact tsn
+  | @next t₁ t₂ t₃ step _ ih => exact TypedSN_of_cbv_rev ty step (ih (preservation ty step) tsn)
+
+def closed (t : Term) : Prop := t.fv = ∅
+
+@[simp]
+theorem closed_app {t u : Term} : closed (.app t u) ↔ closed t ∧ closed u := by
+  simp [closed]
+
+@[simp]
+theorem closed_lam {t : Term} : closed (.lam t) ↔ closed t := by
+  simp [closed]
+
+theorem closed_subst {x : FVar} {u : Term} {t : Term} (h : closed t) : t.subst x u = t := by
+  simp [closed] at h
+  exact subst_fresh (by simp [h])
+
+theorem fv_openAt_sub {t : Term} {k : Nat} {u : Term} : (t.openAt k u).fv ⊆ t.fv ∪ u.fv := by
+  induction t generalizing k with
+  | bvar i =>
+    simp
+    split <;> simp
+  | fvar x => simp
+  | app t₁ t₂ ih₁ ih₂ =>
+    simp [ih₁, ih₂]
+    calc (t₁.openAt k u).fv ∪ (t₂.openAt k u).fv
+      _ ⊆ (t₁.fv ∪ u.fv) ∪ (t₂.fv ∪ u.fv) := Finset.union_subset_union ih₁ ih₂
+      _ = _ := by aesop
+  | lam t ih => simp [ih]
+
+theorem fv_openT_sub {t u : Term} : (t.openT u).fv ⊆ t.fv ∪ u.fv := fv_openAt_sub
+
+theorem fv_sub_openAt {t : Term} {k : Nat} {u : Term} : t.fv ⊆ (t.openAt k u).fv := by
+  induction t generalizing k with
+  | bvar i => simp
+  | fvar x => simp
+  | app t₁ t₂ ih₁ ih₂ =>
+    simp
+    exact Finset.union_subset_union ih₁ ih₂
+  | lam t ih => simp [ih]
+
+theorem fv_sub_openT {t u : Term} : t.fv ⊆ (t.openT u).fv := fv_sub_openAt
+
+theorem fv_sub_dom_of_hasType {Γ : TyCtx} {t : Term} {T : Ty} (ty : t.HasType Γ T) : t.fv ⊆ Γ.dom := by
+  induction ty with
+  | type_var ok mem =>
+    simp [TyCtx.mem_dom_iff]
+    exact ⟨_, mem⟩
+  | type_app h₁ h₂ ih₁ ih₂ =>
+    simp
+    exact Finset.union_subset ih₁ ih₂
+  | @type_lam Γ t T₁ T₂ L h ih =>
+    simp
+    let ⟨x, hx⟩ := (L ∪ t.fv).choose_fresh'
+    simp at hx
+    have sub := ih x hx.1
+    simp at sub
+    have sub' : t.fv ⊆ Γ.dom ∪ {x} := Finset.Subset.trans fv_sub_openT sub
+    rw [Finset.subset_iff]
+    intro y mem
+    have mem' := Finset.mem_of_subset sub' mem
+    simp at mem'
+    cases mem' with
+    | inl mem => exact mem
+    | inr eq =>
+      subst y
+      exact False.elim (hx.2 mem)
+
+theorem closed_of_hasType_empty {t : Term} {T : Ty} (ty : t.HasType [] T) : closed t := by
+  have : t.fv ⊆ ∅ := fv_sub_dom_of_hasType ty
+  simp at this
+  simp [this, closed]
+
+theorem closed_of_TypedSN {T : Ty} {t : Term} (tsn : TypedSN T t) : closed t :=
+  closed_of_hasType_empty (HasType_of_TypedSN tsn)
+
+def substs (ts : List (FVar × Term)) (t : Term) : Term :=
+  ts.foldl (init := t) (fun t (x, u) => t.subst x u)
+
+@[simp]
+theorem substs_nil {t : Term} : substs [] t = t := rfl
+
+@[simp]
+theorem substs_cons {p : FVar × Term} {ts : List (FVar × Term)} {t : Term} :
+  substs (p :: ts) t = substs ts (t.subst p.1 p.2) := rfl
+
+theorem closed_substs {ts : List (FVar × Term)} {t : Term} (h : closed t) : substs ts t = t := by
+  induction ts generalizing t with
+  | nil => simp [h]
+  | cons p ts ih => simp [closed_subst, h, ih h]
+
+theorem substs_app {t u : Term} {ts : List (FVar × Term)} : (substs ts (.app t u)) = (substs ts t).app (substs ts u) := by
+  induction ts generalizing t u with
+  | nil => simp
+  | cons p ts ih => simp [ih]
+
+theorem substs_lam {t : Term} {ts : List (FVar × Term)} : (substs ts (.lam t)) = (.lam (substs ts t)) := by
+  induction ts generalizing t with
+  | nil => simp
+  | cons p ts ih => simp [ih]
+
+def dom_substs (ts : List (FVar × Term)) : Finset FVar := ts.foldr (init := ∅) (fun (x, _) dom => dom ∪ {x})
+
+@[simp]
+theorem dom_substs_nil : dom_substs [] = ∅ := rfl
+
+@[simp]
+theorem dom_substs_cons {p : FVar × Term} {ts : List (FVar × Term)} : dom_substs (p :: ts) = dom_substs ts ∪ {p.1} := by
+  simp [dom_substs]
+
+theorem mem_dom_substs_iff {ts : List (FVar × Term)} {x : FVar} : x ∈ dom_substs ts ↔ ∃ u, (x, u) ∈ ts := by
+  induction ts with
+  | nil => simp
+  | cons p ts ih =>
+    simp [ih]
+    apply Iff.intro
+    . intro mem
+      match mem with
+      | .inl ⟨u, mem⟩ => exact ⟨u, .inr mem⟩
+      | .inr eq => exact ⟨p.2, .inl (by simp [eq])⟩
+    . intro ⟨u, mem⟩
+      cases mem with
+      | inl eq => simp [←eq]
+      | inr mem => exact .inl ⟨u, mem⟩
+
+def ok_substs (ts : List (FVar × Term)) : Prop :=
+  match ts with
+  | [] => True
+  | (x, _) :: ts => x ∉ dom_substs ts ∧ ok_substs ts
+
+@[simp]
+theorem ok_substs_nil : ok_substs [] := by simp [ok_substs]
+
+@[simp]
+theorem ok_substs_cons {p : FVar × Term} {ts : List (FVar × Term)} : ok_substs (p :: ts) ↔ p.1 ∉ dom_substs ts ∧ ok_substs ts := by
+  simp [ok_substs]
+
+-- A list of substitutions instantiates a type context when the order of the variables matches and each substituted term is "normalizing".
+inductive Instantiates : TyCtx → List (FVar × Term) → Prop where
+  | inst_nil : Instantiates [] []
+  | inst_cons {x : FVar} {T : Ty} {u : Term} {Γ : TyCtx} {ts : List (FVar × Term)}
+    (tsn : TypedSN T u) (rest : Instantiates Γ ts) : Instantiates ((x, T) :: Γ) ((x, u) :: ts)
+
+theorem open_substs {t u : Term} {Γ : TyCtx} {ts : List (FVar × Term)} (inst : Instantiates Γ ts) :
+  (t.openT u).substs ts = (t.substs ts).openT (u.substs ts) := by
+  induction inst generalizing t u with
+  | inst_nil => simp
+  | @inst_cons x T t' Γ ts tsn rest ih => simp [open_subst (LC_of_TypedSN tsn), ih]
+
+theorem open_var_substs {t : Term} {y : FVar} {Γ : TyCtx} {ts : List (FVar × Term)} (inst : Instantiates Γ ts) (h : y ∉ dom_substs ts) :
+  (t.openT (fvar y)).substs ts = (t.substs ts).openT (fvar y) := by
+  induction inst generalizing t with
+  | inst_nil => simp
+  | @inst_cons x T u Γ ts tsn rest ih =>
+    simp
+    simp at h
+    have : (t.openT (fvar y)).subst x u = (t.subst x u).openT (fvar y) := open_var_subst (Ne.symm h.2) (LC_of_TypedSN tsn)
+    rw [this]
+    exact ih h.1
+
+theorem dom_substs_eq_dom_of_instantiates {Γ : TyCtx} {ts : List (FVar × Term)} (inst : Instantiates Γ ts) : dom_substs ts = Γ.dom := by
+  induction inst with
+  | inst_nil => simp
+  | inst_cons tsn rest ih =>
+    simp
+    rw [ih]
+
+theorem ok_substs_of_ok_instantiates {Γ : TyCtx} {ts : List (FVar × Term)} (inst : Instantiates Γ ts) (ok : Γ.ok) : ok_substs ts := by
+  induction inst with
+  | inst_nil => simp
+  | inst_cons tsn rest ih =>
+    simp at *
+    refine ⟨?_, ih ok.2⟩
+    intro mem
+    rw [dom_substs_eq_dom_of_instantiates rest] at mem
+    exact ok.1 mem
+
+theorem ok_of_ok_substs_instantiates {Γ : TyCtx} {ts : List (FVar × Term)} (inst : Instantiates Γ ts) (ok : ok_substs ts) : Γ.ok := by
+  induction inst with
+  | inst_nil => simp
+  | inst_cons tsn rest ih =>
+    simp at *
+    refine ⟨?_, ih ok.2⟩
+    intro mem
+    rw [←dom_substs_eq_dom_of_instantiates rest] at mem
+    exact ok.1 mem
+
+theorem HasType_substs {E F : TyCtx} {ts : List (FVar × Term)} {t : Term} {T : Ty} (inst : Instantiates E ts) (ty : t.HasType (E ++ F) T) :
+  (substs ts t).HasType F T := by
+  induction inst generalizing t with
+  | inst_nil => exact ty
+  | @inst_cons x U u E ts tsn rest ih =>
+    simp
+    have eq_ctx : E ++ F ++ [] = E ++ F := by simp
+    have ok : (E ++ F).ok := by
+      have := ty.ok
+      simp at this
+      simp [this]
+    have : u.HasType [] U := HasType_of_TypedSN tsn
+    have : u.HasType (E ++ F) U := by
+      rw [←eq_ctx]
+      apply HasType.weaken this
+      rw [eq_ctx]
+      exact ok
+    have ty' : HasType (E ++ F) (t.subst x u) T := HasType.substitution ty this
+    exact ih ty'
+
+theorem TypedSN_of_mem_instantiates {Γ : TyCtx} {ts : List (FVar × Term)} {x : FVar} {t : Term} {T : Ty}
+  (ok : Γ.ok) (inst : Instantiates Γ ts) (mem₁ : (x, t) ∈ ts) (mem₂ : (x, T) ∈ Γ) : TypedSN T t := by
+  induction inst generalizing t with
+  | inst_nil => simp at mem₁
+  | @inst_cons x' T' t' Γ ts tsn rest ih =>
+    simp at mem₁ mem₂ ok
+    match mem₁, mem₂ with
+    | .inl ⟨eq₁, eq₂⟩, .inl ⟨eq₃, eq₄⟩ =>
+      subst x' t' T'
+      exact tsn
+    | .inl ⟨eq₁, eq₂⟩, .inr mem₂' =>
+      subst x'
+      exact False.elim (ok.1 (TyCtx.mem_dom_iff.mpr ⟨T, mem₂'⟩))
+    | .inr mem₁', .inl ⟨eq₃, eq₄⟩ =>
+      subst x'
+      have nmem : x ∉ dom_substs ts := by
+        intro mem
+        rw [dom_substs_eq_dom_of_instantiates rest] at mem
+        exact ok.1 mem
+      have mem := mem_dom_substs_iff.mpr ⟨t, mem₁'⟩
+      exact False.elim (nmem mem)
+    | .inr mem₁, .inr mem₂ => exact ih ok.2 mem₁ mem₂
+
+theorem closed_of_instantiates {Γ : TyCtx} {ts : List (FVar × Term)} (x : FVar) (u : Term) (inst : Instantiates Γ ts) (mem : (x, u) ∈ ts) : closed u := by
+  induction inst with
+  | inst_nil => simp at mem
+  | inst_cons tsn rest ih =>
+    simp at mem
+    cases mem with
+    | inl eq =>
+      simp [eq]
+      exact closed_of_TypedSN tsn
+    | inr mem => exact ih mem
+
+theorem mem_dom_of_instantiates {Γ : TyCtx} {ts : List (FVar × Term)} {x : FVar} {u : Term} (inst : Instantiates Γ ts) (mem : (x, u) ∈ ts) : x ∈ Γ.dom := by
+  induction inst with
+  | inst_nil => simp at mem
+  | inst_cons tsn rest ih =>
+    simp at mem
+    cases mem with
+    | inl eq => simp [eq]
+    | inr mem =>
+      simp
+      exact .inl (ih mem)
+
+theorem substs_var {Γ : TyCtx} {ts : List (FVar × Term)} {x : FVar} {u : Term} (inst : Instantiates Γ ts) (ok : Γ.ok) (mem : (x, u) ∈ ts) :
+  substs ts (.fvar x) = u := by
+  induction ts generalizing Γ with
+  | nil => simp at mem
+  | cons p ts ih =>
+    let ⟨x', u'⟩ := p
+    have : closed u' := closed_of_instantiates x' u' inst (by simp)
+    cases inst with
+    | @inst_cons _ T' _ Γ ts tsn rest =>
+      simp at mem
+      cases mem with
+      | inl eq => simp [eq, closed_substs this]
+      | inr mem =>
+        simp at ok
+        simp
+        split
+        next eq =>
+          subst x'
+          exact False.elim (ok.1 (mem_dom_of_instantiates rest mem))
+        next ne => exact ih rest ok.2 mem
+
+theorem mem_of_mem_instantiates {Γ : TyCtx} {ts : List (FVar × Term)} {x : FVar} (inst : Instantiates Γ ts) (mem : x ∈ Γ.dom) : ∃ u, (x, u) ∈ ts := by
+  induction inst with
+  | inst_nil => simp at mem
+  | @inst_cons x' T' u' Γ ts tsn rest ih =>
+    simp at mem
+    simp
+    cases mem with
+    | inl mem =>
+      have ⟨u, h⟩ := ih mem
+      exact ⟨u, .inr h⟩
+    | inr eq => exact ⟨u', .inl ⟨eq, rfl⟩⟩
+
+theorem LC_substs {Γ : TyCtx} {ts : List (FVar × Term)} {t : Term} (inst : Instantiates Γ ts) (lc : t.LC) : (substs ts t).LC := by
+  induction inst generalizing t with
+  | inst_nil => exact lc
+  | @inst_cons x T u Γ ts tsn rest ih =>
+    simp
+    exact ih (LC_subst lc (LC_of_TypedSN tsn))
+
+theorem substitutions {F E : TyCtx} {ts : List (FVar × Term)} {t : Term} {T : Ty}
+  (ok : (F ++ E).ok) (ty : t.HasType (F ++ E) T) (inst : Instantiates F ts) :
+  (substs ts t).HasType E T := by
+  induction inst generalizing t with
+  | inst_nil => exact ty
+  | @inst_cons x' T' u' F ts tsn rest ih =>
+    simp
+    simp at ok
+    apply ih (by simp [ok])
+    have ty' : HasType (F ++ E ++ []) u' T' := (HasType_of_TypedSN tsn).weaken (F := F ++ E) (by simp [ok])
+    simp at ty'
+    apply HasType.substitution ty ty'
+
+theorem TypedSN_substs {Γ : TyCtx} {ts : List (FVar × Term)} {t : Term} {T : Ty} (ty : t.HasType Γ T) (inst : Instantiates Γ ts) :
+  (substs ts t).TypedSN T := by
+  induction ty generalizing ts with
+  | @type_var Γ x T ok mem =>
+    have := TyCtx.mem_dom_iff.mpr ⟨T, mem⟩
+    have ⟨u, h⟩ := mem_of_mem_instantiates inst this
+    rw [substs_var inst ok h]
+    exact TypedSN_of_mem_instantiates ok inst h mem
+  | @type_app Γ t u T U h₁ h₂ ih₁ ih₂ =>
+    rw [substs_app]
+    have ih₁ := ih₁ inst
+    simp [TypedSN] at ih₁
+    exact ih₁.2.2 (substs ts u) (ih₂ inst)
+  | @type_lam Γ t T₁ T₂ L h ih =>
+    simp [TypedSN]
+    have ty : HasType [] (substs ts t.lam) (T₁.arrow T₂) := by
+      have ty : HasType Γ t.lam (T₁.arrow T₂) := .type_lam L h
+      exact HasType_substs inst (by simp [ty])
+    have body : (substs ts t).IsBody := by
+      refine ⟨L ∪ dom_substs ts, ?_⟩
+      intro x mem
+      simp at mem
+      have : substs ts (t.openT (fvar x)) = (substs ts t).openT (fvar x) := open_var_substs inst mem.2
+      rw [←this]
+      have lc : (t.openT (fvar x)).LC := LC_of_hasType (h x mem.1)
+      exact LC_substs inst lc
+    have sn : (substs ts t.lam).SN := by
+      simp [substs_lam]
+      exact SN_of_value (.value_lam body)
+
+    refine ⟨ty, sn, ?_⟩
+    simp [substs_lam]
+    intro u tsn
+    have ⟨u', steps, val⟩ := halts_of_TypedSN tsn
+    have tsn' : TypedSN T₁ u' := TypedSN_of_cbvs steps tsn
+    have steps : Cbvs ((substs ts t).lam.app u) ((substs ts t).lam.app u') := cbvs_app_right (.value_lam body) steps
+    have beta : Cbv ((substs ts t).lam.app u') ((substs ts t).openT u') := .cbv_beta body val
+    have : ((substs ts t).openT u') = substs ts (t.openT u') := by
+      rw [open_substs inst, closed_substs (closed_of_TypedSN tsn')]
+    rw [this] at beta
+
+    let L' := L ∪ dom_substs ts ∪ t.fv
+    let ⟨y, hy⟩ := L'.choose_fresh'
+    simp [L'] at hy
+    have : t.openT u' = (t.openT (.fvar y)).subst y u' := by
+      simp [open_subst (LC_of_value val), subst_fresh hy.2.2]
+    rw [this] at beta
+    have : (substs ts ((t.openT (.fvar y)).subst y u')) = (substs ((y, u') :: ts) (t.openT (.fvar y))) := by
+      simp
+    rw [this] at beta
+
+    have inst' : Instantiates ((y, T₁) :: Γ) ((y, u') :: ts) := .inst_cons tsn' inst
+    have tsn'' : TypedSN T₂ ((substs ((y, u') :: ts) (t.openT (fvar y)))) := ih y hy.1 inst'
+    have steps : Cbvs ((substs ts t).lam.app u) ((substs ((y, u') :: ts) (t.openT (fvar y)))) := cbvs_snoc steps beta
+    have ty' : HasType [] ((substs ts t).lam.app u) T₂ := by
+      simp [substs_lam] at ty
+      exact .type_app (T := T₁) ty (HasType_of_TypedSN tsn)
+    exact TypedSN_of_cbvs_rev ty' steps tsn''
 
 end Term
