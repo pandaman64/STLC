@@ -1060,18 +1060,19 @@ theorem TypedSN_substs {Γ : TyCtx} {ts : List (FVar × Term)} {t : Term} {T : T
     have tsn' : TypedSN T₁ u' := TypedSN_of_cbvs steps tsn
     have steps : Cbvs ((substs ts t).lam.app u) ((substs ts t).lam.app u') := cbvs_app_right (.value_lam body) steps
     have beta : Cbv ((substs ts t).lam.app u') ((substs ts t).openT u') := .cbv_beta body val
-    have : ((substs ts t).openT u') = substs ts (t.openT u') := by
-      rw [open_substs inst, closed_substs (closed_of_TypedSN tsn')]
-    rw [this] at beta
 
     let L' := L ∪ dom_substs ts ∪ t.fv
     let ⟨y, hy⟩ := L'.choose_fresh'
     simp [L'] at hy
-    have : t.openT u' = (t.openT (.fvar y)).subst y u' := by
-      simp [open_subst (LC_of_value val), subst_fresh hy.2.2]
-    rw [this] at beta
-    have : (substs ts ((t.openT (.fvar y)).subst y u')) = (substs ((y, u') :: ts) (t.openT (.fvar y))) := by
-      simp
+
+    have : ((substs ts t).openT u') = (substs ((y, u') :: ts) (t.openT (.fvar y))) :=
+      calc ((substs ts t).openT u')
+        _ = substs ts (t.openT u') := by
+          rw [open_substs inst, closed_substs (closed_of_TypedSN tsn')]
+        _ = substs ts ((t.openT (.fvar y)).subst y u') := by
+          simp [open_subst (LC_of_value val), subst_fresh hy.2.2]
+        _ = substs ((y, u') :: ts) (t.openT (.fvar y)) := by
+          simp
     rw [this] at beta
 
     have inst' : Instantiates ((y, T₁) :: Γ) ((y, u') :: ts) := .inst_cons tsn' inst
