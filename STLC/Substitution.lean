@@ -303,3 +303,12 @@ theorem preservation {Γ : TyCtx} {t t' : Term} {A : Ty} (step : Step t t') (ty 
         | succ x => simp
     | step_appL _ t₂ _ step => exact .type_app Γ t₂ u A B (iht step) tyu
     | step_appR _ _ u₂ step => exact .type_app Γ t u₂ A B tyt (ihu step)
+
+inductive Steps : Term → Term → Prop
+  | refl (t : Term) : Steps t t
+  | next (t₁ t₂ t₃ : Term) (step : Step t₁ t₂) (rest : Steps t₂ t₃) : Steps t₁ t₃
+
+theorem preservation_steps {Γ : TyCtx} {t t' : Term} {A : Ty} (steps : Steps t t') (ty : HasType Γ t A) : HasType Γ t' A := by
+  induction steps with
+  | refl => exact ty
+  | next t₁ t₂ t₃ step rest ih => exact ih (preservation step ty)
