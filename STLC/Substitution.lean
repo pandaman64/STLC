@@ -226,7 +226,80 @@ deriving Repr, DecidableEq
 
 def TyCtx := Nat → Ty
 
+-- Agreement under a renaming. Intuitively, if we take ρ as an injective renaming, then Δ is an extension of Γ.
+-- In other words, we can get Δ by weakining and reordering the variables in Γ.
+def agrees {α : Type} (Γ Δ : Nat → α) (ρ : Rename) : Prop := Γ = ρ >>> Δ
+
+notation:80 Γ:80 " ⤳[" ρ "] " Δ:80 => agrees Γ Δ ρ
+
+@[simp]
+theorem agrees_apply {α : Type} {Γ Δ : Nat → α} {ρ : Rename} (h : Γ ⤳[ρ] Δ) {x : Nat} : Δ (ρ x) = Γ x := by
+  unfold agrees at h
+  simp [h, comp]
+
+@[simp]
+theorem agrees_up_iff {α : Type} {Γ Δ : Nat → α} {ρ : Rename} (A B : α) : (A .: Γ) ⤳[up ρ] (B .: Δ) ↔ A = B ∧ Γ ⤳[ρ] Δ := by
+  simp [up, agrees]
+
+@[simp]
+theorem agrees_shift {α : Type} {Γ : Nat → α} {A : α} : Γ ⤳[shift] (A .: Γ) := by
+  funext x
+  simp
+
 inductive HasType : TyCtx → Term → Ty → Prop where
   | type_var (Γ : TyCtx) (x : Nat) (A : Ty) : Γ x = A → HasType Γ (.var x) A
   | type_abs (Γ : TyCtx) (t : Term) (A B : Ty) : HasType (A .: Γ) t B → HasType Γ (.abs t) (.arrow A B)
-  | type_app (Γ : TyCtx) (t₁ t₂ : Term) (A B : Ty) : HasType Γ t₁ (.arrow A B) → HasType Γ t₂ A → HasType Γ (.app t₁ t₂) B
+  | type_app (Γ : TyCtx) (t u : Term) (A B : Ty) : HasType Γ t (.arrow A B) → HasType Γ u A → HasType Γ (.app t u) B
+
+@[simp]
+theorem HasType_ids {Γ : TyCtx} {x : Nat} : HasType Γ (ids x) (Γ x) := .type_var Γ x (Γ x) rfl
+
+theorem HasType_rename {Γ Δ : TyCtx} {t : Term} {A : Ty} {ρ : Rename} (ty : HasType Γ t A) (ag : Γ ⤳[ρ] Δ) :
+  HasType Δ (rename ρ t) A := by
+  induction ty generalizing Δ ρ with
+  | type_var Γ x A h =>
+    simp
+    exact .type_var Δ (ρ x) A (by simp [agrees_apply ag, h])
+  | type_abs Γ t A B ty ih =>
+    simp
+    exact .type_abs Δ (rename (up ρ) t) A B (ih (by simp [ag]))
+  | type_app Γ t u A B tyt tyu iht ihu => exact .type_app Δ (rename ρ t) (rename ρ u) A B (iht ag) (ihu ag)
+
+theorem HasType_subst {Γ Δ : TyCtx} {t : Term} {A : Ty} {σ : Substitution} (ty : HasType Γ t A) (ag : ∀ x, HasType Δ (σ x) (Γ x)) :
+  HasType Δ (subst σ t) A := by
+  induction ty generalizing Δ σ with
+  | type_var Γ x A h => simp [←h, ag]
+  | type_abs Γ t A B ty ih =>
+    simp
+    refine .type_abs Δ (subst (ids 0 .: σ >>> rename shift) t) A B (ih ?_)
+    intro x
+    cases x with
+    | zero =>
+      simp
+      exact .type_var (A .: Δ) 0 A (by simp)
+    | succ x =>
+      simp [comp]
+      exact HasType_rename (ag x) (by simp)
+  | type_app Γ t u A B tyt tyu iht ihu =>
+    simp
+    exact .type_app Δ (subst σ t) (subst σ u) A B (iht ag) (ihu ag)
+
+theorem preservation {Γ : TyCtx} {t t' : Term} {A : Ty} (step : Step t t') (ty : HasType Γ t A) : HasType Γ t' A := by
+  induction ty generalizing t' with
+  | type_var Γ x A h => nomatch step
+  | type_abs Γ t A B ty ih =>
+    cases step with
+    | step_abs _ t' step => exact .type_abs Γ t' A B (ih step)
+  | type_app Γ t u A B tyt tyu iht ihu =>
+    cases step with
+    | step_beta t _ _ eq =>
+      subst t'
+      cases tyt with
+      | type_abs Γ t A B tyt =>
+        apply HasType_subst tyt
+        intro x
+        cases x with
+        | zero => simp [tyu]
+        | succ x => simp
+    | step_appL _ t₂ _ step => exact .type_app Γ t₂ u A B (iht step) tyu
+    | step_appR _ _ u₂ step => exact .type_app Γ t u₂ A B tyt (ihu step)
