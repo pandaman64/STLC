@@ -1083,4 +1083,11 @@ theorem TypedSN_substs {Γ : TyCtx} {ts : List (FVar × Term)} {t : Term} {T : T
       exact .type_app (T := T₁) ty (HasType_of_TypedSN tsn)
     exact TypedSN_of_cbvs_rev ty' steps tsn''
 
+theorem TypedSN_of_HasType {t : Term} {T : Ty} (ty : t.HasType [] T) : t.TypedSN T := by
+  have : TypedSN T (substs [] t) := TypedSN_substs ty .inst_nil
+  simpa
+
+theorem SN_of_HasType {t : Term} {T : Ty} (ty : t.HasType [] T) : t.SN :=
+  SN_of_TypedSN (TypedSN_of_HasType ty)
+
 end Term
