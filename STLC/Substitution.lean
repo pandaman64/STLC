@@ -249,7 +249,7 @@ inductive Ty where
   | arrow (a b : Ty)
 deriving Repr, DecidableEq
 
-def TyCtx := Nat → Ty
+def TyCtx := Nat → Option Ty
 
 -- Agreement under a renaming. Intuitively, if we take ρ as an injective renaming, then Δ is an extension of Γ.
 -- In other words, we can get Δ by weakining and reordering the variables in Γ.
@@ -279,12 +279,12 @@ theorem agrees_comp {α : Type} {Γ₁ Γ₂ Γ₃ : Nat → α} (ρ₁ ρ₂ : 
   simp_all [agrees]
 
 inductive HasType : TyCtx → Term → Ty → Prop where
-  | type_var (Γ : TyCtx) (x : Nat) (A : Ty) : Γ x = A → HasType Γ (.var x) A
+  | type_var (Γ : TyCtx) (x : Nat) (A : Ty) : Γ x = .some A → HasType Γ (.var x) A
   | type_abs (Γ : TyCtx) (t : Term) (A B : Ty) : HasType (A .: Γ) t B → HasType Γ (.abs t) (.arrow A B)
   | type_app (Γ : TyCtx) (t u : Term) (A B : Ty) : HasType Γ t (.arrow A B) → HasType Γ u A → HasType Γ (.app t u) B
 
 @[simp]
-theorem HasType_ids {Γ : TyCtx} {x : Nat} : HasType Γ (ids x) (Γ x) := .type_var Γ x (Γ x) rfl
+theorem HasType_ids {Γ : TyCtx} {x : Nat} {A : Ty} (h : Γ x = .some A) : HasType Γ (ids x) A := .type_var Γ x A h
 
 theorem HasType_rename {Γ Δ : TyCtx} {t : Term} {A : Ty} {ρ : Rename} (ty : HasType Γ t A) (ag : Γ ⤳[ρ] Δ) :
   HasType Δ (rename ρ t) A := by
@@ -297,7 +297,7 @@ theorem HasType_rename {Γ Δ : TyCtx} {t : Term} {A : Ty} {ρ : Rename} (ty : H
     exact .type_abs Δ (rename (up ρ) t) A B (ih (by simp [ag]))
   | type_app Γ t u A B tyt tyu iht ihu => exact .type_app Δ (rename ρ t) (rename ρ u) A B (iht ag) (ihu ag)
 
-theorem HasType_subst {Γ Δ : TyCtx} {t : Term} {A : Ty} {σ : Substitution} (ty : HasType Γ t A) (ag : ∀ x, HasType Δ (σ x) (Γ x)) :
+theorem HasType_subst {Γ Δ : TyCtx} {t : Term} {A : Ty} {σ : Substitution} (ty : HasType Γ t A) (ag : ∀ x A, Γ x = .some A → HasType Δ (σ x) A) :
   HasType Δ (subst σ t) A := by
   induction ty generalizing Δ σ with
   | type_var Γ x A h => simp [←h, ag]
@@ -306,12 +306,11 @@ theorem HasType_subst {Γ Δ : TyCtx} {t : Term} {A : Ty} {σ : Substitution} (t
     refine .type_abs Δ (subst (ids 0 .: σ >>> rename shift) t) A B (ih ?_)
     intro x
     cases x with
-    | zero =>
-      simp
-      exact .type_var (A .: Δ) 0 A (by simp)
+    | zero => simp
     | succ x =>
       simp [comp]
-      exact HasType_rename (ag x) (by simp)
+      intro A' h
+      exact HasType_rename (ag x A' h) (by simp)
   | type_app Γ t u A B tyt tyu iht ihu =>
     simp
     exact .type_app Δ (subst σ t) (subst σ u) A B (iht ag) (ihu ag)
@@ -332,7 +331,10 @@ theorem preservation {Γ : TyCtx} {t t' : Term} {A : Ty} (step : Step t t') (ty 
         intro x
         cases x with
         | zero => simp [tyu]
-        | succ x => simp
+        | succ x =>
+          simp
+          intro A' h
+          exact .type_var Γ x A' h
     | step_appL _ t₂ _ step => exact .type_app Γ t₂ u A B (iht step) tyu
     | step_appR _ _ u₂ step => exact .type_app Γ t u₂ A B tyt (ihu step)
 
@@ -689,25 +691,32 @@ theorem red_rename_of_red_ag {Γ Δ : TyCtx} {t : Term} {A : Ty} {ρ : Rename} (
 theorem red_var_of_HasType {Γ : TyCtx} {x : Nat} {A : Ty} (ty : HasType Γ (.var x) A) : Red Γ (.var x) A :=
   CR₃ ty (by simp) (fun t' step => False.elim (no_step_of_neutral (.ne_var x) step))
 
-def instantiates (Γ Δ : TyCtx) (σ : Substitution) := ∀ x, Red Δ (σ x) (Γ x)
+def instantiates (Γ Δ : TyCtx) (σ : Substitution) := ∀ x A, Γ x = .some A → Red Δ (σ x) A
 
 notation:80 Γ:80 " ≈>[" σ "] " Δ:80 => instantiates Γ Δ σ
 
-theorem agrees_of_instantiates {Γ Δ : TyCtx} {ρ : Rename} (inst : Γ ≈>[ren ρ] Δ) : Γ ⤳[ρ] Δ := by
-  funext x
-  have ty := HasType_of_Red (inst x)
-  simp [ren, comp, ids] at ty
-  cases ty with
-  | type_var _ _ _ h => simp [comp, h]
+-- To prove the following theorem, we probably need to strengthen `instantiates` to talk about the case where `Γ x = .none`.
+-- theorem agrees_of_instantiates {Γ Δ : TyCtx} {ρ : Rename} (inst : Γ ≈>[ren ρ] Δ) : Γ ⤳[ρ] Δ := by
+--   funext x
+--   match h : Γ x with
+--   | .some A =>
+--     have ty := HasType_of_Red (inst x A h)
+--     simp [ren, comp, ids] at ty
+--     cases ty with
+--     | type_var _ _ _ h => simp [comp, h]
+--   | .none =>
+--     unfold instantiates at inst
+--     simp [comp]
+--     sorry
 
 theorem instantiates_of_instantiates_of_agrees {Γ Δ Δ' : TyCtx} {σ : Substitution} {ρ : Rename} (inst : Γ ≈>[σ] Δ) (ag : Δ ⤳[ρ] Δ') : Γ ≈>[σ >>> rename ρ] Δ' := by
-  intro x
-  exact red_rename_of_red_ag (inst x) ag
+  intro x A h
+  exact red_rename_of_red_ag (inst x A h) ag
 
 theorem HasType_subst_of_instantiates {Γ Δ : TyCtx} {σ : Substitution} {t : Term} {A : Ty} (ag : Γ ≈>[σ] Δ) (ty : HasType Γ t A) : HasType Δ (subst σ t) A := by
   apply HasType_subst ty
-  intro x
-  exact HasType_of_Red (ag x)
+  intro x A h
+  exact HasType_of_Red (ag x A h)
 
 theorem instantiates_of_scons {Γ Δ : TyCtx} {σ : Substitution} {A : Ty} (inst : Γ ≈>[σ] Δ) : (A .: Γ) ≈>[ids 0 .: (σ >>> rename shift)] (A .: Δ) := by
   intro x
@@ -717,13 +726,17 @@ theorem instantiates_of_scons {Γ Δ : TyCtx} {σ : Substitution} {A : Ty} (inst
     exact red_var_of_HasType (.type_var _ _ _ (by simp))
   | x + 1 =>
     simp [comp]
-    exact red_rename_of_red_ag (inst x) (by simp)
+    intro A' h
+    exact red_rename_of_red_ag (inst x A' h) (by simp)
 
 theorem instantiates_scons_of_red_instantiates {Γ Δ : TyCtx} {σ : Substitution} {u : Term} {A : Ty} (red : Red Δ u A) (inst : Γ ≈>[σ] Δ) : (A .: Γ) ≈>[u .: σ] Δ := by
   intro x
   match x with
   | 0 => simp [red]
-  | x + 1 => simp [inst x]
+  | x + 1 =>
+    simp
+    intro A' h
+    exact inst x A' h
 
 theorem red_app_abs_of_sn_red {Γ : TyCtx} {t u : Term} {A B : Ty} (sn₁ : SN t) (ty : HasType (A .: Γ) t B)
   (red : Red Γ u A) (red_subst : Red Γ (subst (u .: ids) t) B) : Red Γ (.app (.abs t) u) B := by
@@ -753,7 +766,7 @@ theorem red_soundness {Γ Δ : TyCtx} {σ : Substitution} {t : Term} {A : Ty} {t
   induction ty generalizing Δ σ with
   | type_var Γ x A h =>
     simp [←h]
-    exact inst x
+    exact inst x A h
   | type_abs Γ t A B ty ih =>
     have red_subst := ih (instantiates_of_scons inst)
     rw [subst_abs]
