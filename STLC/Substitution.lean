@@ -251,6 +251,9 @@ deriving Repr, DecidableEq
 
 def TyCtx := Nat → Option Ty
 
+instance : EmptyCollection TyCtx where
+  emptyCollection := fun _ => .none
+
 -- Agreement under a renaming. Intuitively, if we take ρ as an injective renaming, then Δ is an extension of Γ.
 -- In other words, we can get Δ by weakining and reordering the variables in Γ.
 def agrees {α : Type} (Γ Δ : Nat → α) (ρ : Rename) : Prop := Γ = ρ >>> Δ
@@ -762,7 +765,7 @@ theorem red_app_abs_of_sn_red {Γ : TyCtx} {t u : Term} {A B : Ty} (sn₁ : SN t
           exact ih₂ u' step (Red_step red step) red_subst'
 
 /-- A well-typed term is a reducible candidate. -/
-theorem red_soundness {Γ Δ : TyCtx} {σ : Substitution} {t : Term} {A : Ty} {ty : HasType Γ t A} (inst : Γ ≈>[σ] Δ) : Red Δ (subst σ t) A := by
+theorem red_soundness {Γ Δ : TyCtx} {σ : Substitution} {t : Term} {A : Ty} (ty : HasType Γ t A) (inst : Γ ≈>[σ] Δ) : Red Δ (subst σ t) A := by
   induction ty generalizing Δ σ with
   | type_var Γ x A h =>
     simp [←h]
@@ -793,3 +796,15 @@ theorem red_soundness {Γ Δ : TyCtx} {σ : Substitution} {t : Term} {A : Ty} {t
     have redu := ihu inst
     have := redt.2 id Δ (subst σ u) (by simp) redu
     simpa
+
+theorem SN_of_HasType {t : Term} {A : Ty} (ty : HasType ∅ t A) : SN t := by
+  have inst : ∅ ≈>[ids] ∅ := by
+    intro x A h
+    simp at h
+  have red : Red ∅ (subst ids t) A := red_soundness ty inst
+  simp at red
+  exact CR₁ red
+
+example : HasType ∅ (.abs (.var 0)) (.arrow .base .base) := by
+  refine .type_abs ∅ (.var 0) .base .base ?_
+  refine .type_var (.some .base .: _) 0 .base rfl
