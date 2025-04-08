@@ -331,15 +331,6 @@ theorem preservation {Γ : TyCtx} {t t' : Term} {A : Ty} (step : Step t t') (ty 
     | step_appL _ t₂ _ step => exact .type_app Γ t₂ u A B (iht step) tyu
     | step_appR _ _ u₂ step => exact .type_app Γ t u₂ A B tyt (ihu step)
 
-inductive Steps : Term → Term → Prop
-  | refl (t : Term) : Steps t t
-  | next (t₁ t₂ t₃ : Term) (step : Step t₁ t₂) (rest : Steps t₂ t₃) : Steps t₁ t₃
-
-theorem preservation_steps {Γ : TyCtx} {t t' : Term} {A : Ty} (steps : Steps t t') (ty : HasType Γ t A) : HasType Γ t' A := by
-  induction steps with
-  | refl => exact ty
-  | next t₁ t₂ t₃ step rest ih => exact ih (preservation step ty)
-
 theorem rename_abs_inv {t u : Term} {ρ : Rename} (eq : rename ρ t = .abs u) : ∃ t', t = .abs t' ∧ rename (up ρ) t' = u := by
   cases t with
   | var | app => simp at eq
@@ -377,6 +368,62 @@ theorem rename_step_of_step_rename {t₁ t₂ : Term} {ρ : Rename} (step : Step
       have ⟨u'', eq, step'⟩ := ih₂ step
       subst u'
       exact ⟨.app t₁ u'', by simp, .step_appR _ _ _ step'⟩
+
+inductive Steps : Term → Term → Prop
+  | refl (t : Term) : Steps t t
+  | next (t₁ t₂ t₃ : Term) (step : Step t₁ t₂) (rest : Steps t₂ t₃) : Steps t₁ t₃
+
+theorem steps_trans {t₁ t₂ t₃ : Term} (steps₁ : Steps t₁ t₂) (steps₂ : Steps t₂ t₃) : Steps t₁ t₃ := by
+  induction steps₁ with
+  | refl => exact steps₂
+  | next t₁ t₂ t₃ step₁ rest₁ ih₁ => exact .next _ _ _ step₁ (ih₁ steps₂)
+
+theorem preservation_steps {Γ : TyCtx} {t t' : Term} {A : Ty} (steps : Steps t t') (ty : HasType Γ t A) : HasType Γ t' A := by
+  induction steps with
+  | refl => exact ty
+  | next t₁ t₂ t₃ step rest ih => exact ih (preservation step ty)
+
+theorem steps_rename_of_steps {t t' : Term} {ρ : Rename} (steps : Steps t t') : Steps (rename ρ t) (rename ρ t') := by
+  induction steps with
+  | refl => exact .refl _
+  | next t₁ t₂ t₃ step rest ih => exact .next _ _ _ (step_rename_of_step ρ step) ih
+
+theorem steps_appL {t t' u : Term} (steps : Steps t t') : Steps (.app t u) (.app t' u) := by
+  induction steps with
+  | refl => exact .refl _
+  | next t₁ t₂ t₃ step rest ih => exact .next _ _ _ (.step_appL _ _ _ step) ih
+
+theorem steps_appR {t u u' : Term} (steps : Steps u u') : Steps (.app t u) (.app t u') := by
+  induction steps with
+  | refl => exact .refl _
+  | next u₁ u₂ u₃ step rest ih => exact .next _ _ _ (.step_appR _ _ _ step) ih
+
+theorem steps_app {t t' u u' : Term} (steps₁ : Steps t t') (steps₂ : Steps u u') : Steps (.app t u) (.app t' u') :=
+  steps_trans (steps_appL steps₁) (steps_appR steps₂)
+
+theorem steps_abs {t t' : Term} (steps : Steps t t') : Steps (.abs t) (.abs t') := by
+  induction steps with
+  | refl => exact .refl _
+  | next t₁ t₂ t₃ step rest ih => exact .next _ _ _ (.step_abs _ _ step) ih
+
+theorem steps_subst_of_step {t : Term} {σ σ' : Substitution} (h : ∀ x, Steps (σ x) (σ' x)) : Steps (subst σ t) (subst σ' t) := by
+  induction t generalizing σ σ' with
+  | var x =>
+    simp
+    exact h x
+  | abs t ih =>
+    simp
+    refine steps_abs (ih fun x => ?_)
+    match x with
+    | 0 =>
+      simp
+      exact .refl _
+    | x + 1 =>
+      simp [comp]
+      exact steps_rename_of_steps (h x)
+  | app t₁ t₂ ih₁ ih₂ =>
+    simp
+    exact steps_app (ih₁ h) (ih₂ h)
 
 mutual
 
@@ -498,6 +545,15 @@ theorem SN_of_SN_app {t u : Term} (sn : SN (.app t u)) : SN t ∧ SN u := by
     . exact (ih (.app t' u) (.step_appL t t' u step) rfl).1
     . exact (ih (.app t u') (.step_appR t u u' step) rfl).2
 
+theorem SN.doubleInductionOn {motive : ∀ t, SN t → ∀ u, SN u → Prop} {t u : Term} (sn₁ : SN t) (sn₂ : SN u)
+  (ih : ∀ t u, (h₁ : ∀ t', Step t t' → SN t') → (h₂ : ∀ u', Step u u' → SN u') →
+    (∀ t', (step : Step t t') → motive t' (h₁ t' step) u (.intro u h₂)) → (∀ u', (step : Step u u') → motive t (.intro t h₁) u' (h₂ u' step)) → motive t (.intro t h₁) u (.intro u h₂)) :
+  motive t sn₁ u sn₂ := by
+  induction sn₁ generalizing u with
+  | intro t h₁ ih₁ =>
+    induction sn₂ with
+    | intro u h₂ ih₂ => exact ih t u h₁ h₂ (fun t' step => ih₁ t' step (.intro u h₂)) ih₂
+
 theorem SN_of_SN_rename {t : Term} {ρ : Rename} (sn : SN (rename ρ t)) : SN t := by
   generalize h : rename ρ t = s at sn
   induction sn generalizing t ρ with
@@ -513,6 +569,26 @@ theorem SN_rename_of_SN {t : Term} {ρ : Rename} (sn : SN t) : SN (rename ρ t) 
     have ⟨t'', eq, step'⟩ := rename_step_of_step_rename step
     subst t'
     exact ih t'' step'
+
+theorem SN_app_abs_of_SN {t u : Term} (sn₁ : SN t) (sn₂ : SN u) (sn₃ : SN (subst (u .: ids) t)) : SN (.app (.abs t) u) := by
+  induction sn₁ generalizing u with
+  | intro t h₁ ih₁ =>
+    induction sn₂ with
+    | intro u h₂ ih₂ =>
+      refine .intro _ (fun s step => ?_)
+      cases step with
+      | step_beta _ _ _ eq => exact eq ▸ sn₃
+      | step_appL _ tabs _ step =>
+        cases step with
+        | step_abs _ t' step =>
+          match sn₃ with
+          | .intro _ h₃ => exact ih₁ t' step (.intro u h₂) (h₃ _ (substitutivity step (u .: ids)))
+      | step_appR _ _ u' step =>
+        have h (x : Nat) : Steps (subst (u .: ids) (.var x)) (subst (u' .: ids) (.var x)) := by
+          match x with
+          | 0 => exact .next _ _ _ step (.refl _)
+          | x + 1 => exact .refl _
+        exact ih₂ _ step (SN_steps (steps_subst_of_step h) sn₃)
 
 def Red (Γ : TyCtx) (t : Term) (A : Ty) : Prop :=
   match A with
@@ -536,12 +612,12 @@ theorem Red_step {Γ : TyCtx} {t t' : Term} {A : Ty} (red : Red Γ t A) (step : 
     have red'' := red.2 ρ Δ u ag red'
     exact ih₂ red'' (.step_appL (rename ρ t) (rename ρ t') u (step_rename_of_step ρ step))
 
-theorem CN₂ {Γ : TyCtx} {t t' : Term} {A : Ty} (red : Red Γ t A) (steps : Steps t t') : Red Γ t' A := by
+theorem CR₂ {Γ : TyCtx} {t t' : Term} {A : Ty} (red : Red Γ t A) (steps : Steps t t') : Red Γ t' A := by
   induction steps with
   | refl => exact red
   | next t₁ t₂ t₃ step rest ih => exact ih (Red_step red step)
 
-theorem CN₁₃ {Γ : TyCtx} {t : Term} {A : Ty} : (Red Γ t A → SN t) ∧ (HasType Γ t A → ¬t.isAbs → (∀ t', Step t t' → Red Γ t' A) → Red Γ t A) := by
+theorem CR₁₃ {Γ : TyCtx} {t : Term} {A : Ty} : (Red Γ t A → SN t) ∧ (HasType Γ t A → ¬t.isAbs → (∀ t', Step t t' → Red Γ t' A) → Red Γ t A) := by
   induction A generalizing Γ t with
   | base =>
     refine ⟨?_, ?_⟩
@@ -586,11 +662,11 @@ theorem CN₁₃ {Γ : TyCtx} {t : Term} {A : Ty} : (Red Γ t A → SN t) ∧ (H
             subst ρt
             exact ih u' step (Red_step red step)
 
-theorem CN₁ {Γ : TyCtx} {t : Term} {A : Ty} (red : Red Γ t A) : SN t := CN₁₃.1 red
+theorem CR₁ {Γ : TyCtx} {t : Term} {A : Ty} (red : Red Γ t A) : SN t := CR₁₃.1 red
 
 -- This "Neutrality" comes from Girard's "Proofs and Types" and is different from the Neutral above.
-theorem CN₃ {Γ : TyCtx} {t : Term} {A : Ty} (ty : HasType Γ t A) (ne : ¬t.isAbs) (cls : ∀ t', Step t t' → Red Γ t' A) : Red Γ t A :=
-  CN₁₃.2 ty ne cls
+theorem CR₃ {Γ : TyCtx} {t : Term} {A : Ty} (ty : HasType Γ t A) (ne : ¬t.isAbs) (cls : ∀ t', Step t t' → Red Γ t' A) : Red Γ t A :=
+  CR₁₃.2 ty ne cls
 
 theorem red_rename_of_red_ag {Γ Δ : TyCtx} {t : Term} {A : Ty} {ρ : Rename} (red : Red Γ t A) (ag : Γ ⤳[ρ] Δ) : Red Δ (rename ρ t) A := by
   induction A generalizing Γ Δ t ρ with
