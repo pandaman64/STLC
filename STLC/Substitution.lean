@@ -1,6 +1,15 @@
-open Classical
-
 set_option autoImplicit false
+
+/-
+References:
+
+* Strong Normalization of the λ-calculus in Lean. Sarah Mameche (2019). Saarland University.
+  * the strategy of the proof follows this thesis.
+* Autosubst: https://www.ps.uni-saarland.de/autosubst/
+  * insprired by the substitution calculus (at meta-level) in this library, with many simplification lemmas taken directly from it.
+* Proof and Types. Jean-Yves Girard. https://www.pls-lab.org/en/Proofs_and_Types
+-/
+namespace Substitution
 
 inductive Term where
   | var (x : Nat)
@@ -808,3 +817,5 @@ theorem SN_of_HasType {t : Term} {A : Ty} (ty : HasType ∅ t A) : SN t := by
 example : HasType ∅ (.abs (.var 0)) (.arrow .base .base) := by
   refine .type_abs ∅ (.var 0) .base .base ?_
   refine .type_var (.some .base .: _) 0 .base rfl
+
+end Substitution
