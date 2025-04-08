@@ -167,6 +167,11 @@ theorem rename_subst (ρ : Rename) (t : Term) : rename ρ t = subst (ren ρ) t :
   | abs t ih => simp [ren, up, ih]
   | app t₁ t₂ ih₁ ih₂ => simp [ih₁, ih₂]
 
+theorem subst_rename_ids (ρ : Rename) : subst (ρ >>> ids) = rename ρ := by
+  funext t
+  show subst (ren ρ) t = rename ρ t
+  rw [rename_subst]
+
 @[simp]
 theorem rename_subst_comp (ρ : Rename) (σ : Substitution) (t : Term) : subst σ (rename ρ t) = subst (ρ >>> σ) t := by
   induction t generalizing ρ σ with
@@ -204,7 +209,7 @@ inductive Step : Term → Term → Prop where
   | step_appR (t u₁ u₂ : Term) : Step u₁ u₂ → Step (.app t u₁) (.app t u₂)
   | step_abs (t₁ t₂ : Term) : Step t₁ t₂ → Step (.abs t₁) (.abs t₂)
 
-theorem substitutivity {t₁ t₂ : Term} (h : Step t₁ t₂) (σ : Substitution) : Step (subst σ t₁) (subst σ t₂) := by
+theorem substitutivity {t₁ t₂ : Term} {σ : Substitution} (h : Step t₁ t₂) : Step (subst σ t₁) (subst σ t₂) := by
   induction h generalizing σ with
   | step_beta t u t' eq =>
     subst t'
@@ -213,14 +218,14 @@ theorem substitutivity {t₁ t₂ : Term} (h : Step t₁ t₂) (σ : Substitutio
     simp -- Wow!
   | step_appL t₁ t₂ u h ih =>
     simp
-    exact .step_appL (subst σ t₁) (subst σ t₂) (subst σ u) (ih σ)
+    exact .step_appL (subst σ t₁) (subst σ t₂) (subst σ u) ih
   | step_appR t u₁ u₂ h ih =>
     simp
-    exact .step_appR (subst σ t) (subst σ u₁) (subst σ u₂) (ih σ)
+    exact .step_appR (subst σ t) (subst σ u₁) (subst σ u₂) ih
   | step_abs t₁ t₂ h ih =>
     simp
     let σ' := ids 0 .: σ >>> rename shift
-    exact .step_abs (subst σ' t₁) (subst σ' t₂) (ih σ')
+    exact .step_abs (subst σ' t₁) (subst σ' t₂) ih
 
 theorem step_rename_of_step {t t' : Term} (ρ : Rename) (step : Step t t') : Step (rename ρ t) (rename ρ t') := by
   induction step generalizing ρ with
@@ -406,7 +411,7 @@ theorem steps_abs {t t' : Term} (steps : Steps t t') : Steps (.abs t) (.abs t') 
   | refl => exact .refl _
   | next t₁ t₂ t₃ step rest ih => exact .next _ _ _ (.step_abs _ _ step) ih
 
-theorem steps_subst_of_step {t : Term} {σ σ' : Substitution} (h : ∀ x, Steps (σ x) (σ' x)) : Steps (subst σ t) (subst σ' t) := by
+theorem steps_subst_of_steps {t : Term} {σ σ' : Substitution} (h : ∀ x, Steps (σ x) (σ' x)) : Steps (subst σ t) (subst σ' t) := by
   induction t generalizing σ σ' with
   | var x =>
     simp
@@ -424,6 +429,13 @@ theorem steps_subst_of_step {t : Term} {σ σ' : Substitution} (h : ∀ x, Steps
   | app t₁ t₂ ih₁ ih₂ =>
     simp
     exact steps_app (ih₁ h) (ih₂ h)
+
+theorem steps_subst_of_step {t u u' : Term} (step : Step u u') : Steps (subst (u .: ids) t) (subst (u' .: ids) t) := by
+  apply steps_subst_of_steps
+  intro x
+  match x with
+  | 0 => exact .next _ _ _ step (.refl _)
+  | x + 1 => exact .refl _
 
 mutual
 
@@ -582,13 +594,8 @@ theorem SN_app_abs_of_SN {t u : Term} (sn₁ : SN t) (sn₂ : SN u) (sn₃ : SN 
         cases step with
         | step_abs _ t' step =>
           match sn₃ with
-          | .intro _ h₃ => exact ih₁ t' step (.intro u h₂) (h₃ _ (substitutivity step (u .: ids)))
-      | step_appR _ _ u' step =>
-        have h (x : Nat) : Steps (subst (u .: ids) (.var x)) (subst (u' .: ids) (.var x)) := by
-          match x with
-          | 0 => exact .next _ _ _ step (.refl _)
-          | x + 1 => exact .refl _
-        exact ih₂ _ step (SN_steps (steps_subst_of_step h) sn₃)
+          | .intro _ h₃ => exact ih₁ t' step (.intro u h₂) (h₃ _ (substitutivity step))
+      | step_appR _ _ u' step => exact ih₂ _ step (SN_steps (steps_subst_of_step step) sn₃)
 
 def Red (Γ : TyCtx) (t : Term) (A : Ty) : Prop :=
   match A with
@@ -678,3 +685,98 @@ theorem red_rename_of_red_ag {Γ Δ : TyCtx} {t : Term} {A : Ty} {ρ : Rename} (
     refine ⟨HasType_rename red.1 ag, ?_⟩
     intro ρ' Δ' u ag' red'
     exact red.2 (ρ >>> ρ') Δ' u (agrees_comp ρ ρ' ag ag') red'
+
+theorem red_var_of_HasType {Γ : TyCtx} {x : Nat} {A : Ty} (ty : HasType Γ (.var x) A) : Red Γ (.var x) A :=
+  CR₃ ty (by simp) (fun t' step => False.elim (no_step_of_neutral (.ne_var x) step))
+
+def instantiates (Γ Δ : TyCtx) (σ : Substitution) := ∀ x, Red Δ (σ x) (Γ x)
+
+notation:80 Γ:80 " ≈>[" σ "] " Δ:80 => instantiates Γ Δ σ
+
+theorem agrees_of_instantiates {Γ Δ : TyCtx} {ρ : Rename} (inst : Γ ≈>[ren ρ] Δ) : Γ ⤳[ρ] Δ := by
+  funext x
+  have ty := HasType_of_Red (inst x)
+  simp [ren, comp, ids] at ty
+  cases ty with
+  | type_var _ _ _ h => simp [comp, h]
+
+theorem instantiates_of_instantiates_of_agrees {Γ Δ Δ' : TyCtx} {σ : Substitution} {ρ : Rename} (inst : Γ ≈>[σ] Δ) (ag : Δ ⤳[ρ] Δ') : Γ ≈>[σ >>> rename ρ] Δ' := by
+  intro x
+  exact red_rename_of_red_ag (inst x) ag
+
+theorem HasType_subst_of_instantiates {Γ Δ : TyCtx} {σ : Substitution} {t : Term} {A : Ty} (ag : Γ ≈>[σ] Δ) (ty : HasType Γ t A) : HasType Δ (subst σ t) A := by
+  apply HasType_subst ty
+  intro x
+  exact HasType_of_Red (ag x)
+
+theorem instantiates_of_scons {Γ Δ : TyCtx} {σ : Substitution} {A : Ty} (inst : Γ ≈>[σ] Δ) : (A .: Γ) ≈>[ids 0 .: (σ >>> rename shift)] (A .: Δ) := by
+  intro x
+  match x with
+  | 0 =>
+    simp
+    exact red_var_of_HasType (.type_var _ _ _ (by simp))
+  | x + 1 =>
+    simp [comp]
+    exact red_rename_of_red_ag (inst x) (by simp)
+
+theorem instantiates_scons_of_red_instantiates {Γ Δ : TyCtx} {σ : Substitution} {u : Term} {A : Ty} (red : Red Δ u A) (inst : Γ ≈>[σ] Δ) : (A .: Γ) ≈>[u .: σ] Δ := by
+  intro x
+  match x with
+  | 0 => simp [red]
+  | x + 1 => simp [inst x]
+
+theorem red_app_abs_of_sn_red {Γ : TyCtx} {t u : Term} {A B : Ty} (sn₁ : SN t) (ty : HasType (A .: Γ) t B)
+  (red : Red Γ u A) (red_subst : Red Γ (subst (u .: ids) t) B) : Red Γ (.app (.abs t) u) B := by
+  induction sn₁ generalizing u with
+  | intro t h₁ ih₁ =>
+    have sn₂ : SN u := CR₁ red
+    induction sn₂ with
+    | intro u h₂ ih₂ =>
+      refine CR₃ ?_ (by simp) ?_
+      . exact .type_app Γ (.abs t) u A B (.type_abs Γ t A B ty) (HasType_of_Red red)
+      . intro s step
+        cases step with
+        | step_beta _ _ _ eq => exact eq ▸ red_subst
+        | step_appL _ t' _ step =>
+          cases step with
+          | step_abs _ t' step =>
+            have step' : Step (subst (u .: ids) t) (subst (u .: ids) t') := substitutivity step
+            have red_subst' : Red Γ (subst (u .: ids) t') B := Red_step red_subst step'
+            exact ih₁ t' step (preservation step ty) red red_subst'
+        | step_appR _ _ u' step =>
+          have steps' : Steps (subst (u .: ids) t) (subst (u' .: ids) t) := steps_subst_of_step step
+          have red_subst' : Red Γ (subst (u' .: ids) t) B := CR₂ red_subst steps'
+          exact ih₂ u' step (Red_step red step) red_subst'
+
+/-- A well-typed term is a reducible candidate. -/
+theorem red_soundness {Γ Δ : TyCtx} {σ : Substitution} {t : Term} {A : Ty} {ty : HasType Γ t A} (inst : Γ ≈>[σ] Δ) : Red Δ (subst σ t) A := by
+  induction ty generalizing Δ σ with
+  | type_var Γ x A h =>
+    simp [←h]
+    exact inst x
+  | type_abs Γ t A B ty ih =>
+    have red_subst := ih (instantiates_of_scons inst)
+    rw [subst_abs]
+    unfold Red
+    refine ⟨.type_abs Δ (subst (ids 0 .: σ >>> rename shift) t) A B (HasType_of_Red red_subst), ?_⟩
+    generalize eq : subst (ids 0 .: σ >>> rename shift) t = t' at *
+    intro ρ Δ' u ag redu
+    rw [rename_abs]
+    have red_subst' : Red (A .: Δ') (rename (up ρ) t') B := red_rename_of_red_ag red_subst (by simp [ag])
+
+    have sn : SN (rename (up ρ) t') := CR₁ red_subst'
+    have red_subst'' : Red Δ' (subst (u .: ids) (rename (up ρ) t')) B := by
+      rw [←eq]
+      simp [up, subst_rename_ids]
+      have : Γ ≈>[σ >>> rename ρ] Δ' := instantiates_of_instantiates_of_agrees inst ag
+      have : (A .: Γ) ≈>[u .: σ >>> rename ρ] Δ' :=
+        instantiates_scons_of_red_instantiates redu (instantiates_of_instantiates_of_agrees inst ag)
+      exact ih this
+
+    exact red_app_abs_of_sn_red sn (HasType_of_Red red_subst') redu red_subst''
+  | type_app Γ t u A B tyt tyu iht ihu =>
+    simp
+    have redt := iht inst
+    have redu := ihu inst
+    have := redt.2 id Δ (subst σ u) (by simp) redu
+    simpa
